@@ -1,0 +1,424 @@
+function simple_image_viewer
+    close all;
+    % Create figure and panel on it
+    f = figure('Name', 'Simple Image Viewer', 'NumberTitle', 'Off','Position',[100 100 1000 600], 'WindowScrollWheelFcn', @scrollWheelMoved);
+    % Create panels on the figure
+    buttonPanel = uipanel(f, 'Units', 'normalized', 'Position', [0 0 0.2 1]);%[left bottom width height]
+    axesPanel = uipanel(f, 'Units', 'normalized', 'Position', [0.2 0 0.8 1]);
+    
+    % Create axes on the axes panel
+    ax1 = axes(axesPanel, 'Position', [0.025 0.50 0.45 0.4]);
+    ax2 = axes(axesPanel, 'Position', [0.525 0.50 0.45 0.4]);
+
+    % Create button on the panel
+    load_button = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'Load Images', ...
+        'Units', 'normalized','Position', [0.2 0.9 0.6 0.06], 'Callback', @load_images_callback);
+    load_masks = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'Load Masks', ...
+        'Units', 'normalized','Position', [0.2 0.82 0.6 0.06], 'Callback', @load_masks_callback);
+    save_button = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'Save Masks', ...
+        'Units', 'normalized','Position', [0.2 0.74 0.6 0.06], 'Callback', @save_images_callback, 'Enable', 'on');
+    staticMask_button = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'Draw Static Mask', ...
+        'Units', 'normalized','Position', [0.2 0.66 0.6 0.06], 'Callback', @static_mask_callback, 'Enable', 'on');
+    dynamicMask_button = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'Draw rect Dynamic Mask', ...
+        'Units', 'normalized','Position', [0.2 0.58 0.6 0.06], 'Callback', @dynamic_mask_callback, 'Enable', 'on');
+    dynamicPolyMask_button = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'Draw Poly Dynamic Mask', ...
+        'Units', 'normalized','Position', [0.2 0.5 0.6 0.06], 'Callback', @dynamic_polymask_callback, 'Enable', 'on');
+    % Add an undo button to the UI
+    undo_button = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'Undo', ...
+        'Units', 'normalized','Position', [0.2 0.42 0.6 0.06], 'Callback', @undo_callback, 'Enable', 'on');
+    % Create input fields for frame range on the button panel
+    uicontrol(buttonPanel, 'Style', 'text', 'String', 'From Frame:', ...
+        'Units', 'normalized', 'Position', [0.1 0.32 0.4 0.08]);    %[left bottom width height]
+    uicontrol(buttonPanel, 'Style', 'text', 'String', 'To Frame:', ...
+        'Units', 'normalized', 'Position', [0.5 0.32 0.4 0.08]);
+    from_frame = uicontrol(buttonPanel, 'Style', 'edit', ...
+        'Units', 'normalized', 'Position', [0.2 0.32 0.2 0.04], 'String', '1');
+    to_frame = uicontrol(buttonPanel, 'Style', 'edit', ...
+        'Units', 'normalized', 'Position', [0.6 0.32 0.2 0.04], 'String', '1');
+    overlay_mask_checkbox = uicontrol(buttonPanel, 'Style', 'checkbox', ...
+        'String', 'Preview mask on image', ...
+        'Units', 'normalized', 'Position', [0.1 0.2 0.8 0.1], 'Value', 1);
+    frame_number = uicontrol('Parent', f, 'Style', 'text', 'Position', [530 60 50 20], 'String', '1','FontSize', 14);
+    clearMask_button = uicontrol(buttonPanel, 'Style', 'pushbutton', 'String', 'clear masks', ...
+            'Units', 'normalized','Position', [0.2 0 0.6 0.06], 'Callback', @clear_mask_callback, 'Enable', 'on');
+    % Create slider on the panel
+    slider = uicontrol(axesPanel, 'Style', 'slider', 'Units', 'normalized', 'Position', [0.1 0.17 0.6 0.08], ...
+        'Callback', @slider_callback, 'Visible', 'on');
+
+    % Image data
+    img_data = struct('imgs', [], 'white_imgs', [], 'img_files', [], 'mask_files', [], 'num_imgs', 0);
+
+    function load_images_callback(~, ~)
+        % Get the last used folder
+        last_used_folder = get_last_used_folder('images_folder');
+        % Ask the user to select a folder
+        folder_name = uigetdir(last_used_folder);
+        if folder_name == 0  % user clicked cancel
+            return;
+        end
+        % Save the selected folder as the last used folder
+        save_folder_path('images_folder', folder_name);
+        % Find all .tif files in the selected folder
+        img_data.img_files = dir(fullfile(folder_name, '*.tif'));
+        img_data.num_imgs = numel(img_data.img_files);
+        set(to_frame, 'String', num2str(img_data.num_imgs));
+        % Load the images
+        img_data.imgs = cell(1, img_data.num_imgs);
+        img_data.white_imgs = cell(1, img_data.num_imgs);
+        for i = 1:img_data.num_imgs
+            img_data.imgs{i} = imread(fullfile(folder_name, img_data.img_files(i).name));
+            % Create a white image of the same size
+            img_data.white_imgs{i} = 255 * ones(size(img_data.imgs{i}), 'uint8');
+        end
+        % load masks if found 
+        if exist(strrep(folder_name, 'cropped', 'masks'),'dir')
+           loadMasks(strrep(folder_name, 'cropped', 'masks'))
+        end
+        % Initialize the slider
+        set(slider, 'Min', 1, 'Max', img_data.num_imgs, 'Value', 1, ...
+            'SliderStep', [1/(img_data.num_imgs-1) , 1/(img_data.num_imgs-1)], 'Visible', 'On');
+        
+        % Display the first image
+        imshow(img_data.imgs{1}, 'Parent', ax1);
+        imshow(img_data.white_imgs{1}, 'Parent', ax2);
+    end
+    function load_masks_callback(~, ~)
+        if(img_data.num_imgs == 0)
+            display_warning("load some images first");
+        else 
+            % Get the last used folder
+            last_used_folder = get_last_used_folder('masks_folder');
+            % Ask the user to select a folder
+            folder_name = uigetdir(last_used_folder);
+            if folder_name == 0  % user clicked cancel
+                return;
+            end
+            % Save the selected folder as the last used folder
+            save_folder_path('masks_folder', folder_name);
+            loadMasks(folder_name)
+            % Initialize the slider
+            set(slider, 'Min', 1, 'Max', img_data.num_imgs, 'Value', 1, ...
+                'SliderStep', [1/(img_data.num_imgs-1) , 1/(img_data.num_imgs-1)], 'Visible', 'On');
+
+            % Display the first image
+            imshow(img_data.imgs{1}, 'Parent', ax1);
+            imshow(img_data.white_imgs{1}, 'Parent', ax2);
+        end
+    end
+    function save_images_callback(~, ~)
+        if(img_data.num_imgs == 0)
+            display_warning("load some images first");
+        else  
+            % Ask the user to select a folder
+            folder_name = uigetdir;
+            if folder_name == 0  % user clicked cancel
+                return;
+            end
+
+            % Save the white images
+            for i = 1:img_data.num_imgs
+                imwrite(img_data.white_imgs{i}, fullfile(folder_name, img_data.img_files(i).name));
+            end
+
+            % Inform the user
+            msgbox('masks saved successfully', 'Success');
+        end
+    end
+    function slider_callback(~, ~)
+        if(img_data.num_imgs == 0)
+            display_warning("load some images first");
+        else        
+        % Get the current slider value
+        slider_value = round(get(slider, 'Value'));
+        set(frame_number, 'String', num2str(slider_value)); % Update the frame number display
+        % Display the corresponding image
+        if get(overlay_mask_checkbox, 'Value') == 1 % If the checkbox is checked
+            % Overlay the mask on the image
+            overlay_img = imoverlay(img_data.imgs{slider_value}, ~img_data.white_imgs{slider_value}, [1 0 0]); % Overlay in red color
+            imshow(overlay_img, 'Parent', ax1);
+        else
+            imshow(img_data.imgs{slider_value}, 'Parent', ax1);
+        end
+        imshow(img_data.white_imgs{slider_value}, 'Parent', ax2);
+        end
+    end
+    function clear_mask_callback(~,~)
+        for i = 1:img_data.num_imgs            
+            % Create a white image of the same size
+            img_data.white_imgs{i} = 255 * ones(size(img_data.imgs{i}), 'uint8');
+        end
+        % Update the displayed images
+        imshow(img_data.imgs{round(get(slider, 'Value'))}, 'Parent', ax1);
+        imshow(img_data.white_imgs{round(get(slider, 'Value'))}, 'Parent', ax2);
+    end
+    function save_folder_path(purpose, folder_name)
+        % Load existing paths
+        if exist('mask_creator_metadata.mat', 'file')
+            M = load('mask_creator_metadata.mat').M;  % loads 'M'
+        else
+            M = containers.Map;  % Create a new map
+            M('description') = "metadata for mask creator";
+        end
+
+        % Add the new path
+        M(purpose) = folder_name;
+
+        % Save the updated map
+        save('mask_creator_metadata.mat', 'M');
+    end
+    function folder_name = get_last_used_folder(purpose)
+        folder_name = '';
+        % Check if the map file exists
+        if exist('mask_creator_metadata.mat', 'file')
+            % Load the map
+            M = load('mask_creator_metadata.mat').M;  % loads 'M'
+            % Get the folder path for the specified purpose
+            if isKey(M, purpose)
+                folder_name = M(purpose);
+            end
+        end
+    end
+    function undo_callback(~, ~)
+        % Restore white_imgs to its previous state
+        img_data.white_imgs = img_data.last_white_imgs;
+
+        % Update the displayed images
+        imshow(img_data.imgs{get(slider1, 'Value')}, 'Parent', ax1);
+        imshow(img_data.white_imgs{get(slider2, 'Value')}, 'Parent', ax2);
+
+        % Disable the undo button
+        set(undo_button, 'Enable', 'off');
+    end
+    function static_mask_callback(~, ~)
+        if(img_data.num_imgs == 0)
+            display_warning("load some images first");
+        else
+            % Draw the rectangle on the first image
+            h = imrect(ax1); % let user draw rectangle on first axis
+            pos = round(wait(h)); % wait for user to double click rectangle, then return position
+            delete(h); % delete the rectangle after double click
+            pos = validateRect(pos);
+            from_frame_int = get(slider, 'Value'); % get to frame
+            % Convert rectangle to binary mask
+            % Create a binary mask of size same as image, with rectangle as ones and rest as zeros
+            mask = poly2mask([pos(1), pos(1)+pos(3), pos(1)+pos(3), pos(1)], ...
+                             [pos(2), pos(2), pos(2)+pos(4), pos(2)+pos(4)], ...
+                             size(img_data.imgs{1}, 1), size(img_data.imgs{1}, 2));
+
+            % Store the current state of white images before applying the mask
+            img_data.last_white_imgs = img_data.white_imgs;
+
+            % Apply the mask to the white images
+            to_frame_int = str2double(get(to_frame, 'String')); % get to frame
+            for i = from_frame_int:to_frame_int
+                img_data.white_imgs{i}(mask == 1) = 0; % set pixels inside rectangle to black (0)
+            end
+
+            % Update the displayed images
+            imshow(img_data.imgs{round(get(slider, 'Value'))}, 'Parent', ax1);
+            imshow(img_data.white_imgs{round(get(slider, 'Value'))}, 'Parent', ax2);
+        end
+    end
+    function dynamic_mask_callback(~, ~)
+        if(img_data.num_imgs == 0)
+            display_warning("load some images first");
+        else  
+            % Apply the mask to the white images
+            from_frame_int = str2double(get(from_frame, 'String')); % get from frame
+            to_frame_int = str2double(get(to_frame, 'String')); % get to frame
+            display_warning("draw rect on from frame")        
+            % Let user draw the rectangle on the from_frame
+            h = imrect(ax1);
+            pos_start = round(wait(h));
+            pos_start = validateRect(pos_start);
+            delete(h);  % Delete the rectangle
+            wait_for_keypress('n')
+            display_warning("draw rect on to frame")
+            % Let user draw the rectangle on the to_frame
+            h = imrect(ax1,pos_start);
+            pos_end = round(wait(h));
+            pos_end = validateRect(pos_end);
+            delete(h);  % Delete the rectangle
+
+            % Interpolate the positions
+            num_frames = to_frame_int - from_frame_int + 1;
+            pos_all = zeros(num_frames, 4);
+            for i = 1:4
+                pos_all(:, i) = round(linspace(pos_start(i), pos_end(i), num_frames));
+            end
+
+            % Loop over all frames
+            for frame = from_frame_int:to_frame_int
+                pos = pos_all(frame-from_frame_int+1, :);  % Get the position for the current frame
+
+                % Get the image size
+                [img_height, img_width, ~] = size(img_data.imgs{frame});
+
+                % Convert rectangle to binary mask
+                mask = poly2mask([pos(1), pos(1)+pos(3), pos(1)+pos(3), pos(1)], ...
+                                 [pos(2), pos(2), pos(2)+pos(4), pos(2)+pos(4)], ...
+                                 img_height, img_width);
+
+                % TODO: Use the mask for the current frame
+                img_data.white_imgs{frame}(mask == 1) = 0; % set pixels inside rectangle to black (0)
+            end
+            % Update the displayed images
+            get(slider, 'Value')
+            imshow(img_data.imgs{to_frame_int}, 'Parent', ax1);
+            imshow(img_data.white_imgs{to_frame_int}, 'Parent', ax2);
+        end
+    end
+    function dynamic_polymask_callback(~, ~)
+        if(img_data.num_imgs == 0)
+            display_warning("load some images first");
+        else  
+            % Apply the mask to the white images
+%             disp(class(get(slider, 'Value')))
+            from_frame_int = get(slider, 'Value'); % get from frame
+            
+            display_warning("draw rect on from frame")        
+            % Let user draw the rectangle on the from_frame
+            h = impoly(ax1);
+            pos_start = round(wait(h));
+            
+            pos_start = validatePoly(pos_start);
+            delete(h);  % Delete the rectangle
+            wait_for_keypress('n')
+            display_warning("draw rect on to frame")
+            get(slider, 'Value')
+            to_frame_int = get(slider, 'Value'); % get to frame
+            % Let user draw the rectangle on the to_frame
+            h = impoly(ax1,pos_start);
+            pos_end = round(wait(h));
+            pos_end = validatePoly(pos_end); %n*2
+            delete(h);  % Delete the rectangle
+            
+            % Interpolate the positions
+            num_frames = to_frame_int - from_frame_int + 1;
+            % Initialize a 3D matrix to hold the interpolated polygons
+            pos_all = zeros(size(pos_end, 1), size(pos_end, 2), num_frames);
+
+            % Interpolate
+            for i = 1:num_frames
+                t = (i - 1) / (num_frames - 1);  % Parameter for linear interpolation
+                pos_all(:, :, i) = round((1 - t) * pos_start + t * pos_end);
+            end
+            
+            % Loop over all frames
+            for frame = from_frame_int:to_frame_int                
+                pos = pos_all(:,:,frame-from_frame_int+1);  % Get the position for the current frame
+
+                % Get the image size
+                [img_height, img_width, ~] = size(img_data.imgs{frame});
+                
+                % Convert rectangle to binary mask
+                mask = poly2mask(pos(:,1), pos(:,2), img_height, img_width);
+%                 pos
+%                 disp(size(mask))
+%                 disp(sum(sum(mask)))
+                % TODO: Use the mask for the current frame
+                img_data.white_imgs{frame}(mask == 1) = 0; % set pixels inside rectangle to black (0)
+            end
+            % Update the displayed images
+            get(slider, 'Value')
+            imshow(img_data.imgs{to_frame_int}, 'Parent', ax1);
+            imshow(img_data.white_imgs{to_frame_int}, 'Parent', ax2);
+        end
+    end
+    function pos = validateRect(pos)
+            % Get the image size
+            [img_height, img_width, ~] = size(img_data.imgs{1});
+           % Ensure rectangle is within image bounds
+            if pos(1) < 0
+                pos(3) = pos(3) + pos(1);
+                pos(1) = 0;
+            end
+            if pos(2) < 0
+                pos(4) = pos(4) + pos(2);
+                pos(2) = 0;
+            end
+            pos(1) = max(1, min(pos(1), img_width));  % x-position
+            pos(2) = max(1, min(pos(2), img_height));  % y-position
+            pos(3) = min(pos(3), img_width - pos(1) + 1);  % width
+            pos(4) = min(pos(4), img_height + pos(2) + 1);  % height 
+    end
+    function new_pos = validatePoly(pos)
+        x = pos(:,1);
+        y = pos(:,2);
+        % Get the image size
+        [img_height, img_width, ~] = size(img_data.imgs{1});
+        % Create a rectangle that represents the boundary of the image
+        x_rect = [1, img_width, img_width, 1, 1];
+        y_rect = [1, 1, img_height, img_height, 1];
+
+        % Use the 'intersection' operation to clip the polygon to the image boundary
+        [x_clipped, y_clipped] = polybool('intersection', x, y, x_rect, y_rect);        
+        new_pos(:,1) = x_clipped';
+        new_pos(:,2) = y_clipped';
+    end
+    function display_warning(msg)
+        duration = 3;
+        % Create a text UI control to display the warning message
+        warning_text = uicontrol('Style', 'text', 'String', msg, ...
+                                 'Units', 'normalized','Position', [0.3 0.91 0.6 0.08], 'BackgroundColor', 'red', ...
+                                 'ForegroundColor', 'white', 'FontSize', 16, 'Visible', 'on');
+
+        % Use a timer to hide the warning message after the specified duration
+        t = timer('StartDelay', duration, 'TimerFcn', {@hide_warning, warning_text});
+        start(t);
+    end
+    function hide_warning(obj, ~, warning_text)
+        % Set the Visible property of the warning text to 'off'
+        set(warning_text, 'Visible', 'off');
+
+        % Delete the text UI control
+        delete(warning_text);
+
+        % Delete the timer
+        delete(obj);
+    end
+    function scrollWheelMoved(~, event)
+        persistent last_scroll_time;  % will retain its value between calls
+        if isempty(last_scroll_time)
+            last_scroll_time = now;  % initialize to the current time
+        end
+        time_between_scrolls = (now - last_scroll_time) * 24 * 60 * 60;  % in seconds
+        last_scroll_time = now;  % update for next time
+
+        step_size = max(1, round(1 / time_between_scrolls*0.1));  % larger step size for smaller time_between_scrolls
+
+        current_value = get(slider, 'Value');
+        if event.VerticalScrollCount > 0  % if scrolling down
+            new_value = current_value - step_size; % decrease the value
+        else  % if scrolling up
+            new_value = current_value + step_size; % increase the value
+        end
+        new_value = max(min(new_value, get(slider, 'Max')), get(slider, 'Min')); % ensure the new value is within the slider's range
+        set(slider, 'Value', new_value);  % update the slider value
+        slider_callback(slider);  % call the slider's callback function to update the display
+    end
+    function wait_for_keypress(key_to_wait_for)
+        display_warning("press n once you are on to frame")
+        keypressed = 0;  % UserData is 0 before key press
+        set(f, 'KeyPressFcn', @myKeyPressFcn)
+
+        function myKeyPressFcn(src, event)
+            if strcmp(event.Key, key_to_wait_for)
+                keypressed = 1;  % Set UserData to 1 after key press
+            end
+        end
+
+        % Wait until UserData is 1
+        while keypressed == 0
+            pause(0.1);  % Short pause to avoid overloading the CPU
+        end
+    end
+    function loadMasks(folder_name)
+        % Find all .tif files in the selected folder
+        img_data.mask_files = dir(fullfile(folder_name, '*.tif'));
+        img_data.white_imgs = cell(1, img_data.num_imgs);
+        for i = 1:img_data.num_imgs
+            img_data.white_imgs{i} = imread(fullfile(folder_name, img_data.mask_files(i).name));
+        end 
+    end
+end
